@@ -1,0 +1,2 @@
+Model,Use_Case,Training_Start,Training_End,Test_Start,Test_End,Training_Rows,Testing_Rows,Decision_Threshold,Accuracy,Precision,Recall,F1,ROC_AUC,PR_AUC,True_Negative,False_Positive,False_Negative,True_Positive,Pre_Alarm_Correct_Detections,Data_Type
+Random Forest,Engine Cooling Risk - Next 24H,2026-06-01,2026-07-15,2026-07-16,2026-07-30,27000,9000,0.3,0.9689,0.2173,0.8111,0.3427,0.9752,0.2066,8647,263,17,73,73,Synthetic / Illustrative
