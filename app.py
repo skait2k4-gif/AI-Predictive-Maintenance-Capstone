@@ -134,46 +134,6 @@ st.markdown(
         margin: 12px 0;
     }
 
-    .compact-card {
-        border: 1px solid rgba(128,128,128,0.28);
-        border-radius: 14px;
-        padding: 16px 14px;
-        min-height: 108px;
-    }
-
-    .compact-card .kicker {
-        font-size: 0.78rem;
-        font-weight: 750;
-        opacity: 0.72;
-        margin-bottom: 8px;
-    }
-
-    .compact-card .value {
-        font-size: 1.08rem;
-        font-weight: 700;
-        line-height: 1.35;
-    }
-
-    .decision-banner {
-        border: 1px solid rgba(34,197,94,0.55);
-        border-radius: 16px;
-        padding: 18px 20px;
-        margin: 10px 0 18px 0;
-    }
-
-    .decision-banner .title {
-        font-size: 1.22rem;
-        font-weight: 800;
-        margin-bottom: 6px;
-    }
-
-    .why-hitl {
-        border: 1px solid rgba(239,68,68,0.45);
-        border-radius: 14px;
-        padding: 16px 18px;
-        margin: 10px 0 16px 0;
-    }
-
     @media (max-width: 1000px) {
         .flow-wrap {
             grid-template-columns: repeat(2, 1fr);
@@ -732,11 +692,37 @@ default_index = (
     else 0
 )
 
+# Professor-demo machine selector. This keeps one selected machine as the
+# single source of truth, while allowing the presenter to quickly focus on
+# Critical/HITL cases without hard-coding individual serial numbers.
+critical_serials = sorted(
+    current_alerts.loc[current_alerts["_sev"] == "CRITICAL", aserial]
+    .dropna().astype(str).unique().tolist()
+)
+
+demo_mode = st.sidebar.selectbox(
+    "Demo Case Filter",
+    ["All Machines", "Critical / HITL Cases"],
+    index=0,
+    help="Use Critical / HITL Cases during the professor demo to show only machines whose current alert requires human authorization.",
+)
+
+selector_serials = critical_serials if demo_mode == "Critical / HITL Cases" else all_serials
+if not selector_serials:
+    selector_serials = all_serials
+
+preferred_default = default_machine if default_machine in selector_serials else selector_serials[0]
+selector_index = selector_serials.index(preferred_default)
+
 selected = st.sidebar.selectbox(
     "Selected Machine",
-    all_serials,
-    index=default_index,
+    selector_serials,
+    index=selector_index,
 )
+
+if demo_mode == "Critical / HITL Cases":
+    st.sidebar.success(f"HITL demo pool: {len(critical_serials)} Critical machines")
+    st.sidebar.caption("Critical alert → RAG → Agent plan → Human approval → Simulated execution → Learning")
 
 st.sidebar.markdown("---")
 st.sidebar.caption("Synthetic academic prototype")
@@ -995,13 +981,34 @@ if page == "🏠 Executive Overview":
     k[2].metric("Critical", f"{critical_count:,}")
     k[3].metric("High", f"{high_count:,}")
     k[4].metric("ML Flagged", f"{ml_flagged_count:,}")
-    k[5].metric("Pre-Alarm Detections", f"{prealarm_correct_detections:,}", help="Correct ML risk detections occurring before the simulated conventional alarm.")
+    k[5].metric("Pre-Alarm Correct Detections", f"{prealarm_correct_detections:,}")
 
     st.caption(
         f"ML proof-of-concept coverage: {ml_cohort_count:,} machines from the "
         f"{fleet_population:,}-machine synthetic fleet. ML results must not be interpreted "
         "as whole-fleet production performance."
     )
+
+    # Professor demo: surface a small, data-driven shortlist of Critical/HITL cases.
+    if critical_serials:
+        st.subheader("Professor Demo — Critical Cases Requiring HITL")
+        demo_cols = [aserial]
+        for c in [acatcol, adesccol, aidcol]:
+            if c and c not in demo_cols:
+                demo_cols.append(c)
+        demo_cases = current_alerts.loc[current_alerts["_sev"] == "CRITICAL", demo_cols].copy().head(5)
+        rename_map = {aserial: "Machine"}
+        if acatcol: rename_map[acatcol] = "System"
+        if adesccol: rename_map[adesccol] = "Alert / Condition"
+        if aidcol: rename_map[aidcol] = "Alert ID"
+        demo_cases = demo_cases.rename(columns=rename_map)
+        demo_cases.insert(1, "Severity", "CRITICAL")
+        demo_cases["Governance"] = "HITL REQUIRED"
+        st.dataframe(demo_cases, use_container_width=True, hide_index=True)
+        st.caption(
+            "For the live demo, select ‘Critical / HITL Cases’ in the sidebar, choose any listed machine, "
+            "then demonstrate RAG → Agentic Service Plan → HITL & Execution → Outcome & Learning."
+        )
 
     left, right = st.columns([1.15, 1])
 
@@ -1208,34 +1215,15 @@ elif page == "👁 Predictive ML":
                 ascending=False,
             ).head(12)
 
-            friendly_feature_names = {
-                "Coolant_7Day_Trend_C_Per_Day": "7-Day Coolant Temp Trend",
-                "Coolant_Temp_Max_C": "Maximum Coolant Temperature",
-                "Coolant_Temp_Avg_C": "Average Coolant Temperature",
-                "Recent_Cooling_Alerts_7D": "Recent Cooling Alerts (7D)",
-                "Days_Since_Cooling_Service": "Days Since Cooling Service",
-                "Hydraulic_Oil_Temp_C": "Hydraulic Oil Temperature",
-                "Fuel_Rate_LPH": "Fuel Rate",
-                "Engine_Load_Pct": "Engine Load",
-                "Ambient_Temp_C": "Ambient Temperature",
-                "Daily_Working_Hours": "Daily Working Hours",
-                "HMR": "Machine Hours (HMR)",
-                "Data_Quality_Score": "Data Quality Score",
-            }
-            imp_view["_friendly_feature"] = imp_view[feature_col].map(
-                friendly_feature_names
-            ).fillna(imp_view[feature_col].astype(str))
-
             if alt is not None:
                 driver_chart = (
                     alt.Chart(imp_view)
                     .mark_bar(cornerRadiusEnd=4)
                     .encode(
                         y=alt.Y(
-                            "_friendly_feature:N",
+                            f"{feature_col}:N",
                             sort="-x",
                             title=None,
-                            axis=alt.Axis(labelLimit=240),
                         ),
                         x=alt.X(
                             "_display_importance:Q",
@@ -1244,12 +1232,12 @@ elif page == "👁 Predictive ML":
                         color=alt.Color(
                             "_display_importance:Q",
                             scale=alt.Scale(
-                                scheme="turbo",
+                                scheme="blues",
                             ),
                             legend=None,
                         ),
                         tooltip=[
-                            alt.Tooltip("_friendly_feature:N", title="Model Driver"),
+                            alt.Tooltip(f"{feature_col}:N", title="Feature"),
                             alt.Tooltip(
                                 "_display_importance:Q",
                                 title="Importance %",
@@ -1330,174 +1318,20 @@ elif page == "👁 Predictive ML":
             hide_index=True,
         )
 
-    st.subheader(f"Selected Machine ML Trend — {selected}")
+    st.subheader("Selected Machine ML Trend")
 
     if selected_pred.empty:
         st.info(
             f"{selected} is not part of the {ml_cohort_count:,}-machine ML "
-            "demonstration cohort. Select an ML-cohort machine from the left "
-            "sidebar to view its predictive trend."
+            "demonstration cohort."
         )
     else:
-        selected_pred = selected_pred.sort_values("Snapshot_Date").copy()
         selected_ml_ready = (
             ml_ready[ml_ready[ml_ready_serial].astype(str) == selected].copy()
             if ml_ready_serial
             else pd.DataFrame()
         )
 
-        latest_machine_pred = selected_pred.iloc[-1]
-        peak_machine_pred = selected_pred.loc[
-            selected_pred["ML_Risk_Probability"].idxmax()
-        ]
-
-        # Clear machine identity / summary for professor demo
-        a, b, c, d = st.columns(4)
-        a.metric("Selected Machine", selected)
-        b.metric(
-            "Latest ML Risk",
-            f"{pct_value(latest_machine_pred.get('ML_Risk_Probability', 0)):.1f}%",
-        )
-        c.metric(
-            "Peak Test-Period Risk",
-            f"{pct_value(peak_machine_pred.get('ML_Risk_Probability', 0)):.1f}%",
-        )
-        d.metric("Peak Risk Level", safe_text(peak_machine_pred.get("ML_Risk_Level")))
-
-        st.caption(
-            f"All predictive charts below correspond to the machine selected in "
-            f"the left sidebar: {selected}."
-        )
-
-        # --------------------------------------------------------
-        # ML RISK TRAJECTORY + 30% PROTOTYPE THRESHOLD
-        # --------------------------------------------------------
-        st.markdown("#### ML Risk Trajectory vs 30% Prototype Threshold")
-
-        risk_trend = selected_pred[[
-            c for c in [
-                "Snapshot_Date",
-                "ML_Risk_Probability",
-                "ML_Predicted_Risk",
-                "Conventional_Alarm_Flag",
-                "Target_Cooling_Risk_Next_24H",
-            ]
-            if c in selected_pred.columns
-        ]].copy()
-
-        risk_trend["ML_Risk_Pct"] = (
-            pd.to_numeric(risk_trend["ML_Risk_Probability"], errors="coerce")
-            .fillna(0) * 100
-        )
-
-        if alt is not None and not risk_trend.empty:
-            risk_line = (
-                alt.Chart(risk_trend)
-                .mark_line(point=True)
-                .encode(
-                    x=alt.X("Snapshot_Date:T", title="Date"),
-                    y=alt.Y(
-                        "ML_Risk_Pct:Q",
-                        title="ML Risk Probability (%)",
-                        scale=alt.Scale(domain=[0, 100]),
-                    ),
-                    tooltip=[
-                        alt.Tooltip("Snapshot_Date:T", title="Date"),
-                        alt.Tooltip("ML_Risk_Pct:Q", title="ML Risk %", format=".1f"),
-                    ]
-                    + ([alt.Tooltip("ML_Predicted_Risk:Q", title="ML Flag")]
-                       if "ML_Predicted_Risk" in risk_trend.columns else [])
-                    + ([alt.Tooltip("Conventional_Alarm_Flag:Q", title="Conventional Alarm")]
-                       if "Conventional_Alarm_Flag" in risk_trend.columns else [])
-                    + ([alt.Tooltip("Target_Cooling_Risk_Next_24H:Q", title="Actual Next-24H Risk")]
-                       if "Target_Cooling_Risk_Next_24H" in risk_trend.columns else []),
-                )
-            )
-
-            threshold_rule = (
-                alt.Chart(pd.DataFrame({"Threshold": [30.0]}))
-                .mark_rule(strokeDash=[7, 5])
-                .encode(
-                    y=alt.Y("Threshold:Q"),
-                    tooltip=[
-                        alt.Tooltip(
-                            "Threshold:Q",
-                            title="Prototype Decision Threshold %",
-                        )
-                    ],
-                )
-            )
-
-            st.altair_chart(
-                (risk_line + threshold_rule).properties(height=300),
-                use_container_width=True,
-            )
-        else:
-            st.line_chart(
-                risk_trend.set_index("Snapshot_Date")[["ML_Risk_Pct"]]
-            )
-
-        # --------------------------------------------------------
-        # EARLY-WARNING VERIFICATION FOR THE SELECTED MACHINE
-        # --------------------------------------------------------
-        ml_flag = pd.to_numeric(
-            selected_pred.get("ML_Predicted_Risk", pd.Series(0, index=selected_pred.index)),
-            errors="coerce",
-        ).fillna(0).astype(int)
-        target_flag = pd.to_numeric(
-            selected_pred.get(
-                "Target_Cooling_Risk_Next_24H",
-                pd.Series(0, index=selected_pred.index),
-            ),
-            errors="coerce",
-        ).fillna(0).astype(int)
-        conventional_flag = pd.to_numeric(
-            selected_pred.get(
-                "Conventional_Alarm_Flag",
-                pd.Series(0, index=selected_pred.index),
-            ),
-            errors="coerce",
-        ).fillna(0).astype(int)
-
-        true_positive_mask = (ml_flag == 1) & (target_flag == 1)
-        prealarm_mask = true_positive_mask & (conventional_flag == 0)
-
-        selected_tp_count = int(true_positive_mask.sum())
-        selected_prealarm_count = int(prealarm_mask.sum())
-
-        e1, e2, e3 = st.columns(3)
-        e1.metric("Correct Risk Snapshots", selected_tp_count)
-        e2.metric("Correct Before Alarm", selected_prealarm_count)
-        e3.metric(
-            "Early-Warning Demo",
-            "YES" if selected_prealarm_count > 0 else "NOT VERIFIED",
-        )
-
-        if selected_prealarm_count > 0:
-            first_idx = selected_pred.loc[prealarm_mask].index[0]
-            first_row = selected_pred.loc[first_idx]
-            first_date = first_row.get("Snapshot_Date")
-            first_risk = pct_value(first_row.get("ML_Risk_Probability", 0))
-            st.success(
-                f"Verified synthetic early-warning case for {selected}: the model "
-                f"correctly flagged next-24h cooling risk before the simulated "
-                f"conventional alarm on {first_date:%d-%b-%Y} at {first_risk:.1f}% "
-                f"ML risk."
-                if pd.notna(first_date) and hasattr(first_date, "strftime")
-                else f"Verified synthetic early-warning case for {selected}: the "
-                     "model correctly flagged next-24h cooling risk before the "
-                     "simulated conventional alarm."
-            )
-        else:
-            st.warning(
-                f"{selected} is in the ML cohort, but this machine is not verified "
-                "as a correct pre-alarm detection in the test-period output. For the "
-                "professor demo, choose a machine showing Early-Warning Demo = YES."
-            )
-
-        # --------------------------------------------------------
-        # SUPPORTING COOLANT-TEMPERATURE TREND
-        # --------------------------------------------------------
         trend_cols = [
             c
             for c in [
@@ -1509,40 +1343,68 @@ elif page == "👁 Predictive ML":
         ]
 
         if len(trend_cols) >= 2:
-            with st.expander("Supporting Coolant-Temperature Trend", expanded=False):
-                trend_data = selected_ml_ready[trend_cols].dropna(
-                    subset=["Snapshot_Date"]
+            trend_data = selected_ml_ready[trend_cols].dropna(
+                subset=["Snapshot_Date"]
+            )
+
+            if alt is not None:
+                melted = trend_data.melt(
+                    id_vars=["Snapshot_Date"],
+                    var_name="Parameter",
+                    value_name="Temperature_C",
                 )
 
-                if alt is not None:
-                    melted = trend_data.melt(
-                        id_vars=["Snapshot_Date"],
-                        var_name="Parameter",
-                        value_name="Temperature_C",
+                temp_chart = (
+                    alt.Chart(melted)
+                    .mark_line(point=False)
+                    .encode(
+                        x=alt.X("Snapshot_Date:T", title="Date"),
+                        y=alt.Y("Temperature_C:Q", title="Temperature (°C)"),
+                        color=alt.Color(
+                            "Parameter:N",
+                            scale=alt.Scale(
+                                domain=[
+                                    "Coolant_Temp_Avg_C",
+                                    "Coolant_Temp_Max_C",
+                                ],
+                                range=[
+                                    "#38bdf8",
+                                    "#f97316",
+                                ],
+                            ),
+                            title=None,
+                        ),
+                        tooltip=[
+                            "Snapshot_Date:T",
+                            "Parameter:N",
+                            alt.Tooltip("Temperature_C:Q", format=".1f"),
+                        ],
                     )
+                    .properties(height=300)
+                )
 
-                    temp_chart = (
-                        alt.Chart(melted)
-                        .mark_line(point=False)
-                        .encode(
-                            x=alt.X("Snapshot_Date:T", title="Date"),
-                            y=alt.Y("Temperature_C:Q", title="Temperature (°C)"),
-                            color=alt.Color("Parameter:N", title=None),
-                            tooltip=[
-                                alt.Tooltip("Snapshot_Date:T", title="Date"),
-                                alt.Tooltip("Parameter:N", title="Parameter"),
-                                alt.Tooltip("Temperature_C:Q", title="Temperature °C", format=".1f"),
-                            ],
-                        )
-                        .properties(height=260)
-                    )
-                    st.altair_chart(temp_chart, use_container_width=True)
-                else:
-                    st.line_chart(
-                        trend_data.set_index("Snapshot_Date")[
-                            [c for c in trend_cols if c != "Snapshot_Date"]
-                        ]
-                    )
+                st.altair_chart(temp_chart, use_container_width=True)
+            else:
+                st.line_chart(
+                    trend_data.set_index("Snapshot_Date")[
+                        [c for c in trend_cols if c != "Snapshot_Date"]
+                    ]
+                )
+
+        if latest_pred is not None and peak_pred is not None:
+            a, b, c = st.columns(3)
+            a.metric(
+                "Latest ML Risk",
+                f"{pct_value(latest_pred.get('ML_Risk_Probability', 0)):.1f}%",
+            )
+            b.metric(
+                "Peak Test-Period Risk",
+                f"{pct_value(peak_pred.get('ML_Risk_Probability', 0)):.1f}%",
+            )
+            c.metric(
+                "Peak Risk Level",
+                safe_text(peak_pred.get("ML_Risk_Level")),
+            )
 
     with st.expander("Professor / Reviewer Notes — ML Limitations"):
         st.write(
@@ -1693,14 +1555,7 @@ elif page == "🚜 Fleet Intelligence":
         )
         view = view[mask].copy()
 
-    summary_cols = st.columns(4)
-    summary_cols[0].metric("Machines in View", f"{len(view):,}")
-    summary_cols[1].metric("Critical in View", f"{int((view['_sev'] == 'CRITICAL').sum()):,}")
-    summary_cols[2].metric("High in View", f"{int((view['_sev'] == 'HIGH').sum()):,}")
-    summary_cols[3].metric(
-        "ML Flagged in View",
-        f"{int(view[mserial].astype(str).isin(ml_flagged_machines).sum()):,}",
-    )
+    st.metric("Machines in View", f"{len(view):,}")
 
     display_columns = [
         c
@@ -1719,30 +1574,12 @@ elif page == "🚜 Fleet Intelligence":
         if c and c in view.columns
     ]
 
-    fleet_display = view.sort_values(
-        ["_rank", "ML_Risk_Pct"] if "ML_Risk_Pct" in view.columns else ["_rank"],
-        ascending=False,
-        na_position="last",
-    )[display_columns].copy()
-
-    friendly_columns = {
-        mserial: "Machine Serial No.",
-        h_m: "Current HMR",
-        branchcol: "Dealer Branch",
-        appcol: "Application",
-        "_sev": "Current Alert Risk",
-        aidcol: "Alert ID",
-        acatcol: "Alert Category",
-        "ML_Risk_Pct": "ML Risk %",
-        "ML_Risk_Level": "ML Risk Level",
-        "ML_Predicted_Risk": "ML Flag",
-    }
-    fleet_display = fleet_display.rename(
-        columns={k: v for k, v in friendly_columns.items() if k}
-    )
-
     st.dataframe(
-        fleet_display,
+        view.sort_values(
+            ["_rank", "ML_Risk_Pct"] if "ML_Risk_Pct" in view.columns else ["_rank"],
+            ascending=False,
+            na_position="last",
+        )[display_columns],
         use_container_width=True,
         hide_index=True,
         height=580,
@@ -1762,15 +1599,15 @@ elif page == "🔎 Machine 360°":
 
     st.header(f"Machine 360° — {selected}")
 
-    st.markdown(f"### Selected Machine: `{selected}`")
-    cols = st.columns(4)
-    cols[0].metric(
+    cols = st.columns(5)
+    cols[0].metric("Machine", selected)
+    cols[1].metric(
         "Current HMR",
         safe_text(mrow.get(h_m)) if h_m else "-",
     )
-    cols[1].metric("Current Alert Risk", selected_sev)
-    cols[2].metric("Service Records", len(msvc))
-    cols[3].metric("Alert Records", len(malerts))
+    cols[2].metric("Current Alert Risk", selected_sev)
+    cols[3].metric("Service Records", len(msvc))
+    cols[4].metric("Alert Records", len(malerts))
 
     left, right = st.columns(2)
 
@@ -1886,67 +1723,11 @@ elif page == "📚 AI Diagnosis - RAG":
             f"**Observed condition:** {description or '-'}"
         )
 
-        # Keep displayed evidence system-specific whenever matching evidence exists.
-        tsm_display = tsm_res.copy()
-        tsm_system_col = first_existing(tsm_display, ["System", "Subsystem", "Topic"])
-        if not tsm_display.empty and tsm_system_col and system:
-            exact_system = tsm_display[
-                tsm_display[tsm_system_col]
-                .fillna("")
-                .astype(str)
-                .str.lower()
-                .str.contains(system.lower(), regex=False)
-            ]
-            if exact_system.empty and "cool" in system.lower():
-                exact_system = tsm_display[
-                    tsm_display[tsm_system_col]
-                    .fillna("")
-                    .astype(str)
-                    .str.lower()
-                    .str.contains("cool", regex=False)
-                ]
-            if not exact_system.empty:
-                tsm_display = exact_system
-
-        st.subheader("Grounded Diagnostic Summary")
-        if not tsm_display.empty:
-            cause_col = first_existing(
-                tsm_display,
-                ["Possible_Cause", "Possible Cause", "Likely_Cause", "Cause"],
-            )
-            if cause_col:
-                causes = [
-                    safe_text(x)
-                    for x in tsm_display[cause_col].dropna().head(3).tolist()
-                    if safe_text(x) != "-"
-                ]
-                if causes:
-                    st.info(
-                        "**Candidate causes from approved evidence:** "
-                        + "; ".join(causes)
-                        + ".\n\n**Technician inspection is required to confirm root cause.**"
-                    )
-                else:
-                    st.info(
-                        "Relevant approved evidence was retrieved. Technician inspection "
-                        "is required before confirming root cause."
-                    )
-            else:
-                st.info(
-                    "Relevant approved evidence was retrieved. Technician inspection "
-                    "is required before confirming root cause."
-                )
-        else:
-            st.warning(
-                "No system-specific troubleshooting evidence was retrieved. Escalate "
-                "rather than inventing a diagnosis."
-            )
-
         st.subheader("Troubleshooting Manual Evidence")
 
-        if not tsm_display.empty:
+        if not tsm_res.empty:
             st.dataframe(
-                tsm_display.drop(
+                tsm_res.drop(
                     columns=["_score"],
                     errors="ignore",
                 ),
@@ -2013,13 +1794,6 @@ elif page == "🧠 Agentic Service Plan":
             "consequential component replacement."
         )
 
-    if cur_alert is not None:
-        st.info(
-            f"**Case context:** {system or 'Selected system'} | {selected_sev} | "
-            f"{description or 'Observed alert'}. The plan below is coordinated from "
-            "machine context, service history and retrieved approved knowledge."
-        )
-
     st.subheader("Proposed Service Plan")
 
     for index, action in enumerate(
@@ -2067,19 +1841,6 @@ elif page == "🛡️ HITL & Execution":
     if hitl:
         st.error(
             "🔴 HUMAN-IN-THE-LOOP REQUIRED — work order blocked until an authorized decision."
-        )
-
-        st.markdown(
-            """
-            <div class="why-hitl">
-                <b>Why HITL?</b><br>
-                • Current case is classified as <b>Critical</b>.<br>
-                • The proposed intervention may have operational / consequential impact.<br>
-                • Field condition and diagnostic evidence require human validation.<br>
-                • AI remains advisory until an authorized reviewer releases the action.
-            </div>
-            """,
-            unsafe_allow_html=True,
         )
 
         reviewer = st.text_input(
@@ -2173,23 +1934,6 @@ elif page == "🛡️ HITL & Execution":
         "System: Execute only within approved authority and guardrails"
     )
 
-    st.subheader("Authorization Audit Trail")
-    audit_df = pd.DataFrame(
-        [{
-            "Decision ID": f"DEC-{selected}-{auth.get('Timestamp','') or 'PENDING'}",
-            "Machine": selected,
-            "Decision": auth.get("Decision", "PENDING"),
-            "Reviewer": auth.get("Reviewer") or "-",
-            "Timestamp": auth.get("Timestamp") or "-",
-            "Remarks": auth.get("Remarks") or "-",
-        }]
-    )
-    st.dataframe(
-        audit_df,
-        use_container_width=True,
-        hide_index=True,
-    )
-
 
 # ============================================================
 # PAGE 8 — OUTCOME & LEARNING
@@ -2236,18 +1980,8 @@ elif page == "🔄 Outcome & Learning":
             ],
         )
 
-        prediction_valid = st.selectbox(
-            "Prediction / Alert Valid?",
-            ["Not Assessed", "Yes", "Partially", "No"],
-        )
-
-        rag_relevant = st.selectbox(
-            "RAG Diagnosis Relevant?",
-            ["Not Assessed", "Yes", "Partially", "No"],
-        )
-
         useful = st.selectbox(
-            "Agent Service Plan Useful?",
+            "Was AI Recommendation Useful?",
             [
                 "Not Assessed",
                 "Yes",
@@ -2287,9 +2021,7 @@ elif page == "🔄 Outcome & Learning":
                         "Root_Cause": root_cause,
                         "Repair_Action": repair_action,
                         "Validation_Result": validation,
-                        "Prediction_Alert_Valid": prediction_valid,
-                        "RAG_Diagnosis_Relevant": rag_relevant,
-                        "Agent_Plan_Useful": useful,
+                        "AI_Recommendation_Useful": useful,
                         "Technician_Feedback": feedback,
                     }
                 )
@@ -2315,22 +2047,10 @@ elif page == "🔄 Outcome & Learning":
             "No learning record captured for this machine in the current session."
         )
 
-    st.subheader("Closed-Loop Learning Signals")
     st.write(
-        "• **ML feedback:** predicted / alerted condition vs actual field finding"
-    )
-    st.write(
-        "• **RAG feedback:** retrieved diagnostic evidence vs confirmed root cause"
-    )
-    st.write(
-        "• **Agent feedback:** proposed service plan vs action actually completed"
-    )
-    st.write(
-        "• **Service-history feedback:** validated outcome becomes future governed evidence"
-    )
-    st.warning(
-        "No automatic model retraining. Validated outcomes enter a governed learning "
-        "pipeline for review, quality checks, approval and controlled model / knowledge updates."
+        "Feedback supports prediction-vs-actual review, false-positive / "
+        "false-negative analysis, RAG coverage improvement and service-planning "
+        "refinement. It **does not automatically retrain or change the model**."
     )
 
 
@@ -2344,38 +2064,18 @@ elif page == "📊 Value & Governance":
 
     st.subheader("Leadership Dashboard")
 
+    cols = st.columns(5)
+
     leadership = [
-        ("VALUE", "↓ Downtime • ↑ Availability"),
-        ("QUALITY", "Recall • Precision • FTF"),
-        ("COST", "AI Cost • Service Cost"),
-        ("RISK", "Safety • False Alerts • HITL"),
-        ("ADOPTION", "Engineer Usage • Trust"),
+        ("VALUE", "Downtime / MTTR / FTF"),
+        ("QUALITY", "Precision / Recall / usefulness"),
+        ("COST", "AI + integration + review"),
+        ("RISK", "Safety / false negatives / authority"),
+        ("ADOPTION", "Engineer usage / overrides"),
     ]
 
-    cols = st.columns(5)
     for col, (heading, description) in zip(cols, leadership):
-        with col:
-            st.markdown(
-                f"""
-                <div class="compact-card">
-                    <div class="kicker">{heading}</div>
-                    <div class="value">{description}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-    st.markdown(
-        """
-        <div class="decision-banner">
-            <div class="title">Recommended next stage: CONTROLLED PILOT</div>
-            <b>Why:</b> the end-to-end PoC demonstrates the intended AI service workflow.<br>
-            <b>Scope:</b> selected machine model / Engine Cooling use case.<br>
-            <b>Control:</b> shadow validation → HITL-governed live pilot → measured scale.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+        col.metric(heading, description)
 
     st.subheader("Current Prototype Evidence")
 
@@ -2406,56 +2106,19 @@ elif page == "📊 Value & Governance":
             "and controlled improvement."
         )
 
-    st.subheader("Pilot Success Gates")
-
-    pilot_gates = [
-        ("VALUE", "Downtime / availability benefit"),
-        ("QUALITY", "ML + RAG + service quality"),
-        ("COST", "Economics incl. review workload"),
-        ("RISK", "Safety + authority + false alerts"),
-        ("ADOPTION", "Engineer usage + trust"),
-    ]
+    st.subheader("Pilot Decision Framework")
 
     p = st.columns(5)
-    for col, (heading, description) in zip(p, pilot_gates):
-        with col:
-            st.markdown(
-                f"""
-                <div class="compact-card">
-                    <div class="kicker">{heading}</div>
-                    <div class="value">{description}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+    p[0].metric("VALUE", "Business benefit")
+    p[1].metric("QUALITY", "Model + RAG")
+    p[2].metric("COST", "Full economics")
+    p[3].metric("RISK", "Governed")
+    p[4].metric("ADOPTION", "Field use")
 
     st.write(
-        "**Decision options after measured pilot evidence:** "
-        "PROCEED | MODIFY | EXTEND | DEFER | STOP"
+        "**Pilot decision:** Proceed / Modify / Extend / Defer / Stop — based on "
+        "measured evidence rather than technology capability alone."
     )
-
-    st.subheader("PoC Completion Checklist")
-    checklist = pd.DataFrame(
-        {
-            "Capability": [
-                "Five-layer data foundation",
-                "Predictive ML PoC",
-                "Grounded RAG",
-                "Agentic service workflow",
-                "Risk-based HITL",
-                "Outcome learning loop",
-            ],
-            "Prototype Status": [
-                "DEMONSTRATED",
-                "DEMONSTRATED",
-                "DEMONSTRATED",
-                "DEMONSTRATED",
-                "DEMONSTRATED",
-                "DEMONSTRATED",
-            ],
-        }
-    )
-    st.dataframe(checklist, use_container_width=True, hide_index=True)
 
     st.subheader("Recommended Deployment Path")
 
@@ -2556,6 +2219,6 @@ elif page == "📊 Value & Governance":
 st.markdown("---")
 
 st.caption(
-    "STEP 21A FINAL | Professor Demo / Presentation-Polished Fleet Service Command Center | "
+    "STEP 21A | Professor Demo / Presentation-Polished Fleet Service Command Center | "
     "Synthetic academic prototype — not an OEM diagnostic or safety system."
 )
