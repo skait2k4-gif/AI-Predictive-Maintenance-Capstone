@@ -722,6 +722,7 @@ pages = [
     "🧠 Agentic Service Plan",
     "🛡️ HITL & Execution",
     "🔄 Outcome & Learning",
+    "💰 ROI Simulator",
     "📊 Value & Governance",
 ]
 
@@ -2099,7 +2100,186 @@ elif page == "🔄 Outcome & Learning":
 
 
 # ============================================================
-# PAGE 9 — VALUE & GOVERNANCE
+# PAGE 9 — ROI SIMULATOR
+# ============================================================
+
+elif page == "💰 ROI Simulator":
+
+    st.header("ROI Simulator — Business Value Scenario")
+    st.caption(
+        "Interactive academic business-case simulator. All assumptions are illustrative "
+        "and must be replaced with validated field and finance data before a real investment decision."
+    )
+
+    scenario = st.radio(
+        "Scenario preset",
+        ["Conservative", "Base", "Optimistic"],
+        index=1,
+        horizontal=True,
+        help="Choose a preset, then edit any assumption below to test your own case.",
+    )
+
+    presets = {
+        "Conservative": {
+            "machines": 1000, "breakdowns": 2.0, "downtime_h": 10.0,
+            "impact_per_h": 5000, "emergency_premium": 8000,
+            "repeat_rate": 20.0, "repeat_cost": 6000,
+            "breakdown_reduction": 15.0, "mttr_reduction": 10.0,
+            "repeat_reduction": 15.0, "investment_cr": 2.13,
+        },
+        "Base": {
+            "machines": 1000, "breakdowns": 2.0, "downtime_h": 10.0,
+            "impact_per_h": 5000, "emergency_premium": 8000,
+            "repeat_rate": 20.0, "repeat_cost": 6000,
+            "breakdown_reduction": 25.0, "mttr_reduction": 20.0,
+            "repeat_reduction": 30.0, "investment_cr": 1.70,
+        },
+        "Optimistic": {
+            "machines": 1000, "breakdowns": 2.0, "downtime_h": 10.0,
+            "impact_per_h": 5000, "emergency_premium": 8000,
+            "repeat_rate": 20.0, "repeat_cost": 6000,
+            "breakdown_reduction": 30.0, "mttr_reduction": 25.0,
+            "repeat_reduction": 30.0, "investment_cr": 1.42,
+        },
+    }
+    p = presets[scenario]
+
+    st.subheader("Editable Assumptions")
+    a1, a2, a3, a4 = st.columns(4)
+    machines = a1.number_input("Fleet size", min_value=1, value=int(p["machines"]), step=100)
+    breakdowns = a2.number_input("Breakdowns / machine / year", min_value=0.0, value=float(p["breakdowns"]), step=0.1)
+    downtime_h = a3.number_input("Downtime hours / breakdown", min_value=0.0, value=float(p["downtime_h"]), step=1.0)
+    impact_per_h = a4.number_input("Economic impact / downtime hour (₹)", min_value=0, value=int(p["impact_per_h"]), step=500)
+
+    b1, b2, b3, b4 = st.columns(4)
+    emergency_premium = b1.number_input("Emergency service premium / breakdown (₹)", min_value=0, value=int(p["emergency_premium"]), step=500)
+    repeat_rate = b2.number_input("Repeat visit rate (%)", min_value=0.0, max_value=100.0, value=float(p["repeat_rate"]), step=1.0)
+    repeat_cost = b3.number_input("Cost / repeat visit (₹)", min_value=0, value=int(p["repeat_cost"]), step=500)
+    investment_cr = b4.number_input("Year-1 AI investment (₹ Cr)", min_value=0.01, value=float(p["investment_cr"]), step=0.05, format="%.2f")
+
+    c1, c2, c3 = st.columns(3)
+    breakdown_reduction = c1.slider("Breakdown reduction (%)", 0, 60, int(p["breakdown_reduction"]))
+    mttr_reduction = c2.slider("MTTR reduction (%)", 0, 60, int(p["mttr_reduction"]))
+    repeat_reduction = c3.slider("Repeat-visit reduction (%)", 0, 60, int(p["repeat_reduction"]))
+
+    # Benefit model: avoided breakdown downtime + faster recovery on remaining
+    # breakdowns + avoided emergency-service premium + avoided repeat visits.
+    annual_breakdowns = machines * breakdowns
+    baseline_downtime_cost = annual_breakdowns * downtime_h * impact_per_h
+    avoided_breakdown_value = baseline_downtime_cost * breakdown_reduction / 100
+    remaining_downtime_cost = baseline_downtime_cost * (1 - breakdown_reduction / 100)
+    mttr_value = remaining_downtime_cost * mttr_reduction / 100
+    emergency_value = annual_breakdowns * emergency_premium * breakdown_reduction / 100
+    repeat_value = annual_breakdowns * (repeat_rate / 100) * repeat_cost * repeat_reduction / 100
+
+    annual_benefit = avoided_breakdown_value + mttr_value + emergency_value + repeat_value
+    investment = investment_cr * 10_000_000
+    net_benefit = annual_benefit - investment
+    roi_pct = (net_benefit / investment * 100) if investment > 0 else 0
+    payback_months = (investment / annual_benefit * 12) if annual_benefit > 0 else np.nan
+    three_year_benefit = annual_benefit * 3
+
+    st.subheader("Calculated Business Case")
+    r = st.columns(5)
+    r[0].metric("Year-1 Benefit", f"₹{annual_benefit / 10_000_000:.2f} Cr")
+    r[1].metric("Year-1 Investment", f"₹{investment / 10_000_000:.2f} Cr")
+    r[2].metric("Net Benefit", f"₹{net_benefit / 10_000_000:.2f} Cr")
+    r[3].metric("ROI", f"{roi_pct:.0f}%")
+    r[4].metric("Payback", f"{payback_months:.1f} months" if not pd.isna(payback_months) else "-")
+
+    st.info(
+        f"Under the **{scenario}** scenario, the simulator estimates approximately "
+        f"**₹{annual_benefit / 10_000_000:.2f} Cr** annual benefit against "
+        f"**₹{investment / 10_000_000:.2f} Cr** Year-1 investment, producing "
+        f"**{roi_pct:.0f}% ROI** with approximately **{payback_months:.1f} months** payback. "
+        "This is an illustrative academic scenario, not a financial forecast."
+    )
+
+    left, right = st.columns([1.15, 1])
+    with left:
+        st.subheader("Where the Annual Benefit Comes From")
+        benefit_df = pd.DataFrame({
+            "Value Driver": [
+                "Avoided breakdown downtime",
+                "Faster recovery / MTTR",
+                "Avoided emergency premium",
+                "Reduced repeat visits",
+            ],
+            "Benefit_Cr": [
+                avoided_breakdown_value / 10_000_000,
+                mttr_value / 10_000_000,
+                emergency_value / 10_000_000,
+                repeat_value / 10_000_000,
+            ],
+        })
+        if alt is not None:
+            benefit_chart = (
+                alt.Chart(benefit_df)
+                .mark_bar(cornerRadiusEnd=5)
+                .encode(
+                    y=alt.Y("Value Driver:N", sort="-x", title=None),
+                    x=alt.X("Benefit_Cr:Q", title="Annual benefit (₹ Cr)"),
+                    color=alt.Color("Value Driver:N", scale=alt.Scale(scheme="tableau10"), legend=None),
+                    tooltip=[
+                        alt.Tooltip("Value Driver:N", title="Value driver"),
+                        alt.Tooltip("Benefit_Cr:Q", title="₹ Cr", format=".2f"),
+                    ],
+                )
+                .properties(height=320)
+            )
+            st.altair_chart(benefit_chart, use_container_width=True)
+        else:
+            st.bar_chart(benefit_df.set_index("Value Driver"))
+
+    with right:
+        st.subheader("Executive Economics")
+        economics = pd.DataFrame({
+            "Measure": ["Annual benefit", "Year-1 investment", "Net Year-1 benefit", "3-year gross benefit"],
+            "₹ Cr": [
+                annual_benefit / 10_000_000,
+                investment / 10_000_000,
+                net_benefit / 10_000_000,
+                three_year_benefit / 10_000_000,
+            ],
+        })
+        st.dataframe(economics.round(2), use_container_width=True, hide_index=True)
+        st.markdown(
+            "**Management interpretation**  "
+            "\n\nValue is created through fewer breakdowns, shorter recovery time, "
+            "lower emergency-service effort and fewer repeat visits. The pilot should "
+            "validate each driver separately before the business case is approved."
+        )
+
+    st.subheader("Scenario Comparison")
+    comparison_rows = []
+    for name, sp in presets.items():
+        ab = sp["machines"] * sp["breakdowns"]
+        base_dt = ab * sp["downtime_h"] * sp["impact_per_h"]
+        b1v = base_dt * sp["breakdown_reduction"] / 100
+        b2v = base_dt * (1 - sp["breakdown_reduction"] / 100) * sp["mttr_reduction"] / 100
+        b3v = ab * sp["emergency_premium"] * sp["breakdown_reduction"] / 100
+        b4v = ab * (sp["repeat_rate"] / 100) * sp["repeat_cost"] * sp["repeat_reduction"] / 100
+        benefit = b1v + b2v + b3v + b4v
+        inv = sp["investment_cr"] * 10_000_000
+        comparison_rows.append({
+            "Scenario": name,
+            "Annual Benefit (₹ Cr)": round(benefit / 10_000_000, 2),
+            "Investment (₹ Cr)": round(inv / 10_000_000, 2),
+            "Net Benefit (₹ Cr)": round((benefit - inv) / 10_000_000, 2),
+            "ROI": f"{((benefit - inv) / inv * 100):.0f}%",
+            "Payback": f"{(inv / benefit * 12):.1f} months",
+        })
+    st.dataframe(pd.DataFrame(comparison_rows), use_container_width=True, hide_index=True)
+
+    st.warning(
+        "Keep customer economic value separate from OEM / service-provider cash ROI. "
+        "For a real pilot, replace every assumption with approved downtime, failure, "
+        "labour, parts, integration, review-workload and adoption data."
+    )
+
+
+# ============================================================
+# PAGE 10 — VALUE & GOVERNANCE
 # ============================================================
 
 elif page == "📊 Value & Governance":
@@ -2263,6 +2443,6 @@ elif page == "📊 Value & Governance":
 st.markdown("---")
 
 st.caption(
-    "STEP 21A | Professor Demo / Presentation-Polished Fleet Service Command Center | "
+    "FINAL | Professor Demo + ROI Simulator | Fleet Service Command Center | "
     "Synthetic academic prototype — not an OEM diagnostic or safety system."
 )
