@@ -134,6 +134,41 @@ st.markdown(
         margin: 12px 0;
     }
 
+    /* Custom text KPI cards: unlike st.metric, these wrap instead of ellipsizing */
+    .wrap-kpi {
+        border: 1px solid rgba(128,128,128,0.28);
+        border-radius: 14px;
+        padding: 14px 16px;
+        min-height: 112px;
+        height: 100%;
+        box-sizing: border-box;
+        overflow: hidden;
+    }
+    .wrap-kpi-label {
+        font-size: 0.78rem;
+        font-weight: 700;
+        opacity: 0.86;
+        margin-bottom: 9px;
+        line-height: 1.15;
+    }
+    .wrap-kpi-value {
+        font-size: 1.20rem;
+        font-weight: 600;
+        line-height: 1.28;
+        white-space: normal !important;
+        overflow-wrap: break-word !important;
+        word-break: normal !important;
+        text-overflow: clip !important;
+        overflow: visible !important;
+    }
+    .machine-kpi-value {
+        font-size: 1.08rem;
+        font-weight: 650;
+        line-height: 1.25;
+        white-space: normal !important;
+        overflow-wrap: anywhere !important;
+    }
+
     @media (max-width: 1000px) {
         .flow-wrap {
             grid-template-columns: repeat(2, 1fr);
@@ -345,6 +380,21 @@ def ensure_prediction_fields(df):
 
 def metric_card(label, value, help_text=None):
     st.metric(label, value, help=help_text)
+
+
+def wrap_kpi(container, label, value, machine=False):
+    """Render a text KPI that always wraps and never shows Streamlit ellipsis."""
+    value_class = "machine-kpi-value" if machine else "wrap-kpi-value"
+    with container:
+        st.markdown(
+            f'''
+            <div class="wrap-kpi">
+                <div class="wrap-kpi-label">{html.escape(str(label))}</div>
+                <div class="{value_class}">{html.escape(str(value))}</div>
+            </div>
+            ''',
+            unsafe_allow_html=True,
+        )
 
 
 # ============================================================
@@ -1154,18 +1204,14 @@ elif page == "👁 Predictive ML":
 
     st.header("Predictive ML — Engine Cooling Risk | Next 24 Hours")
 
-    m = st.columns(6)
+    m = st.columns(3)
     m[0].metric("Precision", f"{float(precision):.3f}")
     m[1].metric("Recall", f"{float(recall):.3f}")
-    m[2].metric("F1", f"{float(f1):.3f}")
-    m[3].metric("ROC-AUC", f"{float(roc_auc):.3f}")
-    m[4].metric("PR-AUC", f"{float(pr_auc):.3f}")
-    m[5].metric("Threshold", f"{float(threshold):.3f}")
+    m[2].metric("Threshold", f"{float(threshold):.3f}")
 
     st.caption(
-        "Because positive risk events are rare, Precision / Recall / F1 and PR-AUC "
-        "are more informative than accuracy alone. The 0.30 threshold is a prototype "
-        "operating threshold, not an optimized production threshold."
+        "Precision and Recall show the practical detection trade-off. "
+        "The 0.30 threshold is a prototype operating threshold, not an optimized production threshold."
     )
 
     q = st.columns(4)
@@ -1230,10 +1276,8 @@ elif page == "👁 Predictive ML":
                             title="Importance (%)",
                         ),
                         color=alt.Color(
-                            "_display_importance:Q",
-                            scale=alt.Scale(
-                                scheme="blues",
-                            ),
+                            f"{feature_col}:N",
+                            scale=alt.Scale(scheme="tableau20"),
                             legend=None,
                         ),
                         tooltip=[
@@ -1600,7 +1644,7 @@ elif page == "🔎 Machine 360°":
     st.header(f"Machine 360° — {selected}")
 
     cols = st.columns(5)
-    cols[0].metric("Machine", selected)
+    wrap_kpi(cols[0], "Machine", selected, machine=True)
     cols[1].metric(
         "Current HMR",
         safe_text(mrow.get(h_m)) if h_m else "-",
@@ -2075,7 +2119,7 @@ elif page == "📊 Value & Governance":
     ]
 
     for col, (heading, description) in zip(cols, leadership):
-        col.metric(heading, description)
+        wrap_kpi(col, heading, description)
 
     st.subheader("Current Prototype Evidence")
 
@@ -2109,11 +2153,11 @@ elif page == "📊 Value & Governance":
     st.subheader("Pilot Decision Framework")
 
     p = st.columns(5)
-    p[0].metric("VALUE", "Business benefit")
-    p[1].metric("QUALITY", "Model + RAG")
-    p[2].metric("COST", "Full economics")
-    p[3].metric("RISK", "Governed")
-    p[4].metric("ADOPTION", "Field use")
+    wrap_kpi(p[0], "VALUE", "Business benefit")
+    wrap_kpi(p[1], "QUALITY", "Model + RAG")
+    wrap_kpi(p[2], "COST", "Full economics")
+    wrap_kpi(p[3], "RISK", "Governed")
+    wrap_kpi(p[4], "ADOPTION", "Field use")
 
     st.write(
         "**Pilot decision:** Proceed / Modify / Extend / Defer / Stop — based on "
