@@ -1363,7 +1363,7 @@ elif page == "👁 Predictive ML":
             hide_index=True,
         )
 
-    st.subheader("Selected Machine ML Trend")
+    st.subheader(f"Selected Machine ML Trend — {selected}")
 
     if selected_pred.empty:
         st.info(
@@ -1827,7 +1827,8 @@ elif page == "🧠 Agentic Service Plan":
         "Decision Mode",
         "HITL" if hitl else "GUARDRAIL-BASED",
     )
-    cols[2].metric(
+    wrap_kpi(
+        cols[2],
         "Agent State",
         "WAITING FOR APPROVAL" if hitl else "READY / AUTO-AUTHORIZED",
     )
