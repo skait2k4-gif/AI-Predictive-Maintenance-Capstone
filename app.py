@@ -1425,7 +1425,7 @@ elif page == "👁 Predictive ML":
                             alt.Tooltip("Temperature_C:Q", format=".1f"),
                         ],
                     )
-                    .properties(height=300)
+                    .properties(height=260, title="Operating Temperature Trend")
                 )
 
                 st.altair_chart(temp_chart, use_container_width=True)
@@ -1436,8 +1436,181 @@ elif page == "👁 Predictive ML":
                     ]
                 )
 
+        # Presentation evidence: show ML probability on its own scale so the
+        # 30% prototype decision threshold and pre-alarm warning are explicit.
+        risk_trend = selected_pred.dropna(subset=["Snapshot_Date"]).copy()
+        risk_trend["ML_Risk_Pct_Display"] = (
+            pd.to_numeric(risk_trend["ML_Risk_Probability"], errors="coerce")
+            .fillna(0) * 100
+        )
+        threshold_pct = pct_value(threshold)
+
+        if alt is not None and not risk_trend.empty:
+            risk_line = (
+                alt.Chart(risk_trend)
+                .mark_line(point=True, strokeWidth=3)
+                .encode(
+                    x=alt.X("Snapshot_Date:T", title="Date"),
+                    y=alt.Y(
+                        "ML_Risk_Pct_Display:Q",
+                        title="ML Risk Probability (%)",
+                        scale=alt.Scale(domain=[0, 100]),
+                    ),
+                    tooltip=[
+                        alt.Tooltip("Snapshot_Date:T", title="Snapshot"),
+                        alt.Tooltip(
+                            "ML_Risk_Pct_Display:Q",
+                            title="ML Risk %",
+                            format=".1f",
+                        ),
+                    ],
+                )
+            )
+
+            threshold_rule = (
+                alt.Chart(pd.DataFrame({"Threshold": [threshold_pct]}))
+                .mark_rule(color="#ef4444", strokeDash=[8, 5], strokeWidth=2)
+                .encode(y="Threshold:Q")
+            )
+
+            threshold_label = (
+                alt.Chart(pd.DataFrame({"Threshold": [threshold_pct]}))
+                .mark_text(
+                    text=f"Prototype threshold = {threshold_pct:.0f}%",
+                    align="left",
+                    dx=6,
+                    dy=-8,
+                    color="#ef4444",
+                    fontWeight="bold",
+                )
+                .encode(y="Threshold:Q")
+            )
+
+            evidence_mask = pd.Series(False, index=risk_trend.index)
+            if {
+                "ML_Predicted_Risk",
+                "Target_Cooling_Risk_Next_24H",
+                "Conventional_Alarm_Flag",
+            }.issubset(risk_trend.columns):
+                evidence_mask = (
+                    (risk_trend["ML_Predicted_Risk"].fillna(0).astype(int) == 1)
+                    & (risk_trend["Target_Cooling_Risk_Next_24H"].fillna(0).astype(int) == 1)
+                    & (risk_trend["Conventional_Alarm_Flag"].fillna(0).astype(int) == 0)
+                )
+
+            evidence_rows = risk_trend[evidence_mask].copy()
+            evidence_layer = None
+            evidence_text = None
+            if not evidence_rows.empty:
+                # Use the first correct pre-alarm snapshot as the presentation marker.
+                evidence_row = evidence_rows.sort_values("Snapshot_Date").iloc[[0]].copy()
+                evidence_row["Evidence_Label"] = evidence_row.apply(
+                    lambda r: f"Early warning {r['ML_Risk_Pct_Display']:.1f}%",
+                    axis=1,
+                )
+                evidence_layer = (
+                    alt.Chart(evidence_row)
+                    .mark_point(
+                        filled=True,
+                        size=180,
+                        color="#22c55e",
+                        stroke="white",
+                        strokeWidth=2,
+                    )
+                    .encode(
+                        x="Snapshot_Date:T",
+                        y="ML_Risk_Pct_Display:Q",
+                        tooltip=[
+                            alt.Tooltip("Snapshot_Date:T", title="Early-warning snapshot"),
+                            alt.Tooltip(
+                                "ML_Risk_Pct_Display:Q",
+                                title="ML Risk %",
+                                format=".1f",
+                            ),
+                        ],
+                    )
+                )
+                evidence_text = (
+                    alt.Chart(evidence_row)
+                    .mark_text(
+                        align="right",
+                        dx=-10,
+                        dy=-14,
+                        color="#22c55e",
+                        fontWeight="bold",
+                    )
+                    .encode(
+                        x="Snapshot_Date:T",
+                        y="ML_Risk_Pct_Display:Q",
+                        text="Evidence_Label:N",
+                    )
+                )
+
+            alarm_layer = None
+            alarm_text = None
+            if "Conventional_Alarm_Flag" in risk_trend.columns:
+                alarm_rows = risk_trend[
+                    risk_trend["Conventional_Alarm_Flag"].fillna(0).astype(int) == 1
+                ].copy()
+                if not alarm_rows.empty:
+                    first_alarm = alarm_rows.sort_values("Snapshot_Date").iloc[[0]].copy()
+                    first_alarm["Alarm_Label"] = "Simulated conventional alarm"
+                    alarm_layer = (
+                        alt.Chart(first_alarm)
+                        .mark_rule(color="#f59e0b", strokeDash=[3, 3], strokeWidth=2)
+                        .encode(x="Snapshot_Date:T")
+                    )
+                    alarm_text = (
+                        alt.Chart(first_alarm)
+                        .mark_text(
+                            align="left",
+                            dx=7,
+                            dy=12,
+                            color="#f59e0b",
+                            fontWeight="bold",
+                        )
+                        .encode(
+                            x="Snapshot_Date:T",
+                            y=alt.value(10),
+                            text="Alarm_Label:N",
+                        )
+                    )
+
+            risk_chart = risk_line + threshold_rule + threshold_label
+            if evidence_layer is not None:
+                risk_chart = risk_chart + evidence_layer + evidence_text
+            if alarm_layer is not None:
+                risk_chart = risk_chart + alarm_layer + alarm_text
+
+            st.altair_chart(
+                risk_chart.properties(
+                    height=320,
+                    title="ML Risk Trend — Early Warning vs 30% Prototype Threshold",
+                ),
+                use_container_width=True,
+            )
+
+            if not evidence_rows.empty:
+                evidence_first = evidence_rows.sort_values("Snapshot_Date").iloc[0]
+                evidence_date = pd.to_datetime(
+                    evidence_first["Snapshot_Date"], errors="coerce"
+                )
+                evidence_date_text = (
+                    evidence_date.strftime("%d %b %Y")
+                    if not pd.isna(evidence_date)
+                    else "test period"
+                )
+                st.success(
+                    f"Early-warning evidence: {selected} crossed the "
+                    f"{threshold_pct:.0f}% prototype threshold at "
+                    f"{float(evidence_first['ML_Risk_Pct_Display']):.1f}% risk on "
+                    f"{evidence_date_text}, while the simulated conventional alarm "
+                    "was still OFF. This demonstrates prediction before alarm, not "
+                    "automatic diagnosis or component replacement."
+                )
+
         if latest_pred is not None and peak_pred is not None:
-            a, b, c = st.columns(3)
+            a, b, c, d = st.columns(4)
             a.metric(
                 "Latest ML Risk",
                 f"{pct_value(latest_pred.get('ML_Risk_Probability', 0)):.1f}%",
@@ -1447,6 +1620,10 @@ elif page == "👁 Predictive ML":
                 f"{pct_value(peak_pred.get('ML_Risk_Probability', 0)):.1f}%",
             )
             c.metric(
+                "Prototype Threshold",
+                f"{threshold_pct:.0f}%",
+            )
+            d.metric(
                 "Peak Risk Level",
                 safe_text(peak_pred.get("ML_Risk_Level")),
             )
@@ -1962,7 +2139,7 @@ elif page == "🛡️ HITL & Execution":
     cols = st.columns(3)
     cols[0].metric("Decision", auth["Decision"])
     cols[1].metric("Work Order", auth["Work_Order_Status"])
-    cols[2].metric("Execution", auth["Execution_Status"])
+    wrap_kpi(cols[2], "Execution", auth["Execution_Status"])
 
     st.write(
         f"**Reviewer / Authority:** {auth.get('Reviewer') or '-'}"
